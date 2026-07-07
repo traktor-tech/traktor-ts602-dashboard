@@ -246,8 +246,14 @@ function fmtAgo(ms){ const s=Math.max(0,Math.round((Date.now()-ms)/1000));
 function renderTiles(){
   const d=lastSnap;
   if(!d){ document.getElementById("lastup").textContent="Esperando primer dato…"; return; }
-  if(d.temperature!=null) document.getElementById("t-temp").innerHTML=`${(+d.temperature).toFixed(1)}<small>°C</small>`;
-  if(d.humidity!=null)    document.getElementById("t-hum").innerHTML =`${(+d.humidity).toFixed(1)}<small>%</small>`;
+  if(d.temperature!=null){ document.getElementById("t-temp").innerHTML=`${(+d.temperature).toFixed(1)}<small>°C</small>`;
+    document.getElementById("n-temp").textContent=""; }
+  else if(d.tempStatus!=null){ document.getElementById("t-temp").innerHTML=`--<small>°C</small>`;
+    const el=document.getElementById("n-temp"); el.textContent="sin lectura — revisar sonda"; el.style.color="var(--bad)"; }
+  if(d.humidity!=null){ document.getElementById("t-hum").innerHTML =`${(+d.humidity).toFixed(1)}<small>%</small>`;
+    document.getElementById("n-hum").textContent=""; }
+  else if(d.humStatus!=null){ document.getElementById("t-hum").innerHTML=`--<small>%</small>`;
+    const el=document.getElementById("n-hum"); el.textContent="sin lectura"; el.style.color="var(--bad)"; }
   if(d.battery!=null){ const b=+d.battery; document.getElementById("t-bat").innerHTML=`${b}<small>%</small>`;
     const el=document.getElementById("n-bat"); el.textContent=b>=50?"OK":b>=20?"media":"baja";
     el.style.color=b>=50?"var(--ok)":b>=20?"var(--warn)":"var(--bad)"; }
@@ -267,21 +273,26 @@ setInterval(updateFreshness, 30000);
 
 /* ---------- Mensaje entrante (HEX de Milesight -> decode) ---------- */
 function onReading(payload){
-  const d = MS.decode(payload);          // payload: Uint8Array o string hex
-  if(d.ms!=null && d.temperature!=null){
-    const key = String(d.ms);
-    const added = C.mergeReadings(store, [{key, ms:d.ms, temp:d.temperature, hum:(d.humidity!=null?d.humidity:null)}]);
-    C.capStore(store, MAX_STORE);
-    if(added) saveData();
+  const res = MS.decode(payload);        // {signal, imei, readings:[...]}
+  let addedAny = false;
+  for(const r of res.readings){
+    if(r.ms!=null && r.temperature!=null && r.humidity!=null){
+      if(C.mergeReadings(store, [{key:String(r.ms), ms:r.ms, temp:r.temperature, hum:r.humidity}])) addedAny = true;
+    }
   }
-  // snapshot para tiles (aunque falte algún campo, mostramos lo que vino)
-  lastSnap = Object.assign({}, lastSnap, {
-    temperature: d.temperature!=null ? d.temperature : (lastSnap&&lastSnap.temperature),
-    humidity:    d.humidity!=null    ? d.humidity    : (lastSnap&&lastSnap.humidity),
-    battery:     d.battery!=null     ? d.battery     : (lastSnap&&lastSnap.battery),
-    signal:      d.signal!=null      ? d.signal      : (lastSnap&&lastSnap.signal),
-    ms:          d.ms!=null          ? d.ms          : Date.now()
-  });
+  if(addedAny){ C.capStore(store, MAX_STORE); saveData(); }
+
+  const last = res.readings.length ? res.readings[res.readings.length-1] : {};
+  const prev = lastSnap || {};
+  lastSnap = {
+    temperature: last.temperature!=null ? last.temperature : prev.temperature,
+    humidity:    last.humidity!=null    ? last.humidity    : prev.humidity,
+    battery:     last.battery!=null     ? last.battery     : prev.battery,
+    signal:      res.signal!=null       ? res.signal       : prev.signal,
+    ms:          last.ms!=null          ? last.ms          : (prev.ms || Date.now()),
+    tempStatus:  last.tempStatus!=null  ? last.tempStatus  : prev.tempStatus,
+    humStatus:   last.humStatus!=null   ? last.humStatus   : prev.humStatus
+  };
   saveSnap();
   renderTiles(); renderCharts();
 }

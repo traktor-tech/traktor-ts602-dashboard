@@ -1,20 +1,22 @@
 /* milesight.js — Decoder del payload del Milesight TS60x (TS601/TS602).
- * El equipo publica por MQTT un paquete BINARIO (TLV por canales, little-endian),
- * no JSON. Esto lo traduce a {temperature, humidity, battery, signal, ms, imei}.
- * Funciona como <script> en el navegador (global MilesightTS) y con require() en Node.
+ * Validado contra el payload REAL del equipo (2026-07-07): bytes crudos, con cabecera
+ * be02/03/04/05 y uno o varios registros 'ed' (tiempo) con sus canales.
  *
- * Canales (del user guide TS60x):
- *   0x01 battery   UINT8  %          (1 byte)
- *   0x04 temp      INT32/100 °C      (4 bytes LE)
- *   0x05 humidity  UINT16/10 %RH     (2 bytes LE)
- *   0x06 location  lat/long          (8 bytes)
- *   0x07 flight    (1) · 0x0c probe (1) · 0x0e report type (1)
- *   0xed time      flag(1)+UINT32 s  (5 bytes; ts en byte2-5 LE)
- *   Cabecera opcional: 0xbe02 IMEI(15) · be03 IMSI(15) · be04 ICCID(20) · be05 signal(2)
+ * Devuelve: { signal, imei, readings: [ {ms, temperature, humidity, battery,
+ *             tempStatus, humStatus, probe} ] }
+ *   temperature/humidity = null si el equipo reporta error de lectura (canal 08/09).
+ *
+ * Canales:
+ *   be02 IMEI(15 ascii) · be03 IMSI(15) · be04 ICCID(20) · be05 señal(int8 dBm + 1)
+ *   ed  time: flag(1)+UINT32 s (LE)        0e report type(1)
+ *   01  battery UINT8 %                     06 location(8)
+ *   04  temp INT32/100 °C (LE)              05 humidity UINT16/10 %RH (LE)
+ *   08  temp status  (00=error lectura, 01=under, 02=over, 03=sin dato)
+ *   09  humidity status (idem)              0c probe status(1)  07 flight(1)
+ * Funciona como <script> (global MilesightTS) y con require() en Node.
  */
 (function (global) {
   "use strict";
-
   function toBytes(input) {
     if (input && input.length != null && typeof input !== "string") return Array.prototype.slice.call(input);
     var s = String(input).trim().replace(/[^0-9a-fA-F]/g, "");
@@ -29,28 +31,39 @@
   function ascii(b, s, n) { var r = ""; for (var k = 0; k < n; k++) r += String.fromCharCode(b[s + k] || 0); return r; }
 
   function decode(input) {
-    var b = toBytes(input), i = 0, out = {};
+    var b = toBytes(input), i = 0, hdr = { signal: null, imei: null }, readings = [], cur = null;
+    function flush() { if (cur) { readings.push(cur); cur = null; } }
     while (i < b.length) {
       var ch = b[i];
       if (ch === 0xbe) {                                   // cabecera
         var t = b[i + 1];
-        if (t === 0x02) { out.imei = ascii(b, i + 2, 15); i += 2 + 15; }
-        else if (t === 0x03) { i += 2 + 15; }
-        else if (t === 0x04) { i += 2 + 20; }
-        else if (t === 0x05) { out.signal = s8(b[i + 2]); i += 2 + 2; }
-        else break;
+        if (t === 0x02) { hdr.imei = ascii(b, i + 2, 15); i += 17; }
+        else if (t === 0x03) { i += 17; }
+        else if (t === 0x04) { i += 22; }
+        else if (t === 0x05) { hdr.signal = s8(b[i + 2]); i += 4; }
+        else { i += 1; }
       }
-      else if (ch === 0x01) { out.battery = b[i + 1]; i += 2; }
-      else if (ch === 0x04) { out.temperature = s32le(b, i + 1) / 100; i += 5; }
-      else if (ch === 0x05) { out.humidity = u16le(b, i + 1) / 10; i += 3; }
-      else if (ch === 0x06) { i += 9; }                    // location (ignorada)
-      else if (ch === 0x07) { i += 2; }                    // flight mode
-      else if (ch === 0x0c) { i += 2; }                    // probe status
-      else if (ch === 0x0e) { i += 2; }                    // report type
-      else if (ch === 0xed) { out.ms = u32le(b, i + 2) * 1000; i += 6; }  // time
-      else { i += 1; }                                     // desconocido: avanzar defensivo
+      else if (ch === 0xed) {                              // nuevo registro (tiempo)
+        flush();
+        cur = { ms: u32le(b, i + 2) * 1000, temperature: null, humidity: null, battery: null };
+        i += 6;
+      }
+      else if (cur) {
+        if (ch === 0x01) { cur.battery = b[i + 1]; i += 2; }
+        else if (ch === 0x04) { cur.temperature = s32le(b, i + 1) / 100; i += 5; }
+        else if (ch === 0x05) { cur.humidity = u16le(b, i + 1) / 10; i += 3; }
+        else if (ch === 0x08) { cur.tempStatus = b[i + 1]; i += 2; }
+        else if (ch === 0x09) { cur.humStatus = b[i + 1]; i += 2; }
+        else if (ch === 0x06) { i += 9; }                  // location (ignorada)
+        else if (ch === 0x07) { i += 2; }                  // flight
+        else if (ch === 0x0c) { cur.probe = b[i + 1]; i += 2; }
+        else if (ch === 0x0e) { i += 2; }                  // report type
+        else { i += 1; }                                   // desconocido: defensivo
+      }
+      else { i += 1; }
     }
-    return out;
+    flush();
+    return { signal: hdr.signal, imei: hdr.imei, readings: readings };
   }
 
   var api = { decode: decode, toBytes: toBytes };
