@@ -74,7 +74,8 @@
   .card h2{font-size:.85rem; font-weight:600; margin:2px 4px 10px; color:var(--ink-2); display:flex; align-items:center; gap:8px}
   .swatch{width:10px; height:10px; border-radius:3px; flex:none}
   .chart-box{position:relative; height:200px}
-  .empty{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:.82rem}
+  .empty{position:absolute; inset:0; display:flex; align-items:center; justify-content:center; color:var(--muted); font-size:.82rem; pointer-events:none}
+  .empty[hidden]{display:none}
   details.table-card{background:var(--surface); border-radius:16px; box-shadow:var(--shadow); padding:4px}
   summary{cursor:pointer; padding:12px 14px; font-size:.85rem; font-weight:600; color:var(--ink-2); list-style:none}
   summary::-webkit-details-marker{display:none}
